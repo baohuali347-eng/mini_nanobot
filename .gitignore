@@ -2,6 +2,17 @@
 .env
 .env.*
 !.env.example
+# 本地配置可能包含密钥；保留项目技能目录供版本管理。
+/config.json
+**/.mini_nanobot/config.json
+mini_web_token
+# 会话、项目记忆及 SQLite 的 WAL、SHM 和回滚日志。
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 .venv/
 __pycache__/
 *.pyc
