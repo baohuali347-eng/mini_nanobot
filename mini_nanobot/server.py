@@ -1,4 +1,9 @@
-"""本地 HTTP 服务：会话 API、逐行 JSON 事件流、中文前端与访问校验。"""
+"""
+本地 HTTP 服务：会话 API、逐行 JSON 事件流、中文前端与访问校验。
+用来连接前端与后端之间的交流的，比如说你在前端输入问题之后，前端会发送请求，然后
+app.router会注册相对应的函数，然后启动那函数。
+chat函数连接agent.start
+"""
 
 import asyncio
 import hmac
@@ -137,6 +142,8 @@ def create_app(settings: Settings, service: AgentService | None = None, token: s
             return web.Response(text="请先在 webui 目录运行 npm install 和 npm run build。", status=503)
         return web.FileResponse(target, headers={"Cache-Control": "no-cache"})
 
+
+    #这些代码是在注册 HTTP 路由：规定前端访问哪个地址、使用哪种请求方式时，由哪个 Python 函数处理。
     app.router.add_post("/api/login", login)
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/sessions", sessions)

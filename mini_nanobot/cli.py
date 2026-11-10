@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -40,6 +41,7 @@ def initialize(ctx: typer.Context, if_missing: bool = typer.Option(False, "--if-
     typer.echo(f"已创建配置：{path}，请填写项目的 .env。")
 
 
+#启动网页
 @app.command()
 def web(
     ctx: typer.Context,
@@ -128,6 +130,61 @@ def code(
         finally:
             await service.close()
     asyncio.run(run())
+
+
+@app.command("eval")
+def evaluate_tasks(
+    ctx: typer.Context,
+    cases: list[str] = typer.Option([], "--case", help="任务 ID，可重复传入；省略则全部"),
+    modes: list[str] = typer.Option(["single", "serial", "parallel"], "--mode", help="single / serial / parallel / auto / auto_legacy（旧委派提示对照），可重复传入"),
+    repeat: int = typer.Option(1, "--repeat", min=1, max=20, help="每任务每模式的独立重复次数"),
+    max_calls: int = typer.Option(30, "--max-calls", min=1, max=200, help="每次试验共享的模型调用及 HTTP 请求上限"),
+    max_output_tokens: int | None = typer.Option(None, "--max-output-tokens", min=1, max=65536, help="本轮单次模型输出 Token 上限；省略则使用配置"),
+    repairs: int = typer.Option(0, "--repairs", min=0, max=2, help="外部验收失败后的业务修复次数，基线默认 0"),
+    report_repairs: int = typer.Option(0, "--report-repairs", min=0, max=2, help="交接格式更正次数，基线默认 0"),
+    isolated: bool = typer.Option(True, "--isolate/--shared-workspace", help="独立子任务副本；共享模式仅用于基线对照"),
+    timeout: int = typer.Option(180, "--timeout", min=1, max=3600, help="每次试验所有角色的总执行秒数"),
+    seed: int = typer.Option(42, "--seed", help="试验顺序随机种子；不控制模型随机性"),
+    output: Path | None = typer.Option(None, "--output", help="新建结果目录，已有目录不会覆盖"),
+    suite: Path | None = typer.Option(None, "--suite", exists=True, dir_okay=False, help="可信任务集 JSON；其中的校验代码会执行"),
+    config: Path | None = typer.Option(None, "--config", "-c", exists=True, dir_okay=False),
+    list_only: bool = typer.Option(False, "--list", help="只列出任务，不调用模型"),
+    check_only: bool = typer.Option(False, "--self-check", help="离线核对原始代码失败、参考代码通过，不调用模型"),
+):
+    """评测代码修复效果，保存独立代码目录、完整追踪与中文报告。"""
+    import uuid
+
+    from mini_nanobot.evaluation import evaluate, load_cases, self_check
+
+    available = load_cases(suite)
+    unknown = set(cases) - {case.id for case in available}
+    if unknown:
+        raise typer.BadParameter("未知任务：" + "、".join(sorted(unknown)))
+    selected = [case for case in available if not cases or case.id in cases]
+    if list_only:
+        for case in selected:
+            typer.echo(f"{case.id} [{case.category}] {case.description}")
+        return
+    target = (output or Path("eval_results") / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:6])).resolve()
+    if check_only:
+        from mini_nanobot.config import Settings
+        settings = load_settings(ctx.obj, config) if config else Settings(home=target / "profile")
+        report = asyncio.run(self_check(selected, target, settings))
+        typer.echo(f"任务集自检：{'通过' if report['passed'] else '失败'}，共 {len(selected)} 项。\n结果：{target / 'self_check.json'}")
+        if not report["passed"]:
+            raise typer.Exit(1)
+        return
+    settings = load_settings(ctx.obj, config)
+    if not settings.api_key:
+        raise typer.BadParameter("真实评测需要模型密钥；请配置 .env，或使用 --self-check 离线验证。")
+    if max_output_tokens is not None:
+        settings.max_output_tokens = max_output_tokens
+    typer.echo(f"即将执行 {len(selected) * len(modes) * repeat} 次独立试验；每次最多 {max_calls} 次调用、{timeout} 秒。")
+    report = asyncio.run(evaluate(selected, modes, repeat, settings, target, max_calls, timeout, seed, progress=typer.echo,
+                                  max_repairs=repairs, report_repairs=report_repairs, isolated=isolated))
+    for row in report["summary"]:
+        typer.echo(f"{row['mode']}：成功 {row['success_rate']:.1%}，平均 {row['mean_agent_seconds']:.2f} 秒，平均 {row['mean_model_calls']:.1f} 次调用。")
+    typer.echo(f"报告：{target / 'report.md'}\n原始结果：{target / 'report.json'}")
 
 
 @app.command()

@@ -1,6 +1,6 @@
 """
 会话、检查点和项目记忆的唯一持久化入口。旧版数据库保持原样。
-对会话进行处理
+SQLite 持久化入口
 """
 
 from __future__ import annotations
@@ -34,10 +34,11 @@ class SessionStore:
             );
             UPDATE sessions SET status='interrupted' WHERE status='running';
         """)
-        # 仅对精简版库做增量迁移，不删除或重建已有会话。
         with self.connection:
             if "validation" not in {row[1] for row in self.connection.execute("PRAGMA table_info(sessions)")}:
                 self.connection.execute("ALTER TABLE sessions ADD COLUMN validation TEXT NOT NULL DEFAULT '{}'")
+            if "integration" not in {row[1] for row in self.connection.execute("PRAGMA table_info(sessions)")}:
+                self.connection.execute("ALTER TABLE sessions ADD COLUMN integration TEXT NOT NULL DEFAULT '{}'")
         self.path.chmod(0o600)
 
     def create(self, workspace: Path) -> dict[str, Any]:
@@ -56,6 +57,7 @@ class SessionStore:
         item = dict(row)
         item["messages"] = json.loads(item["messages"])
         item["validation"] = json.loads(item["validation"])
+        item["integration"] = json.loads(item["integration"])
         return item
 
     def list(self) -> list[dict[str, Any]]:
@@ -79,16 +81,19 @@ class SessionStore:
             )
         return {**event, "event_id": cursor.lastrowid}
 
-    def save_validation(self, identity: str, result: dict[str, Any]) -> None:
-        with self.connection:
-            self.connection.execute("UPDATE sessions SET validation=? WHERE id=?",
-                                    (json.dumps(result, ensure_ascii=False), identity))
-
     def events(self, identity: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             "SELECT id,payload FROM events WHERE session_id=? ORDER BY id DESC LIMIT 100", (identity,),
         ).fetchall()
         return [{**json.loads(row["payload"]), "event_id": row["id"]} for row in reversed(rows)]
+
+    def save_validation(self, identity: str, result: dict[str, Any]) -> None:
+        with self.connection:
+            self.connection.execute("UPDATE sessions SET validation=? WHERE id=?", (json.dumps(result, ensure_ascii=False), identity))
+
+    def save_integration(self, identity: str, result: dict[str, Any]) -> None:
+        with self.connection:
+            self.connection.execute("UPDATE sessions SET integration=? WHERE id=?", (json.dumps(result, ensure_ascii=False), identity))
 
     def read_memory(self, workspace: Path) -> str:
         row = self.connection.execute("SELECT content FROM memory WHERE workspace=?", (str(workspace),)).fetchone()

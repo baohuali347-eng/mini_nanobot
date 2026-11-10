@@ -20,3 +20,5 @@ build/
 *.egg-info/
 *.log
 .DS_Store
+# 本地评测包含会话、工具输出与模型追踪。
+eval_results/

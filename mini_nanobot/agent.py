@@ -1,6 +1,26 @@
 """
 请求协调层：会话归属、运行/停止、检查点，以及主 agent 与子任务的连接。
 本质上属于建立进行agent运行的上下文
+
+本质上是runner为agent提供嫁衣，在agent执行整个流程
+
+AgentService 管理一次任务的生命周期：
+- 哪个会话正在运行；
+- 如何加载历史、保存检查点；
+- 如何创建子任务管理器；
+- 用户停止后如何取消主任务和子任务；
+- 最后将会话标记为正常结束、错误或取消。
+
+
+agent.py
+  │ 准备上下文、工具、模型接口
+  ↓
+runner.run()
+  │ 调用模型 → 执行工具 → 更新消息 → 继续循环
+  │
+  ├── 调用 emit() ─────────→ agent.py 保存事件、推送界面
+  ├── 调用 checkpoint() ───→ agent.py 保存会话进度
+  └── 返回最终答复 ────────→ agent.py 继续验收和收尾
 """
 
 import asyncio
@@ -19,6 +39,7 @@ from mini_nanobot.session import SessionStore
 from mini_nanobot.subagents import SubagentManager, TaskQuota
 from mini_nanobot.tools.registry import build_tools
 from mini_nanobot.validation import ValidationRunner, validation_loop
+from mini_nanobot.workspaces import WorkspaceBundle
 
 
 def visible_messages(messages):
@@ -85,15 +106,19 @@ class AgentService:
 
         async def emit(event):
             event = redact(event, self.settings.api_key)
-            if event["type"] in {"tool", "task", "error", "compaction", "model", "validation", "repair", "report_repair"}:
+            if event["type"] == "integration":
+                self.store.save_integration(identity, event["integration"])
+            if event["type"] in {"tool", "task", "error", "compaction", "model", "validation", "repair", "report_repair", "integration"}:
                 event = self.store.record(identity, event)
             await output(event)
 
         emit = traced_sink(emit)
 
         async def checkpoint(messages, current_summary):
+            #nonlocal是一个关键字，用于在函数或代码块中声明变量是来自外部作用域的，而不是在当前作用域中创建一个新的局部变量。
             nonlocal history, summary
             history, summary = messages, current_summary
+            #sava此时就存储到了数据库里面
             self.store.save(identity, history, summary, "running")
             await output({"type": "history", "messages": visible_messages(history)})
 
@@ -112,18 +137,21 @@ class AgentService:
                 if manager:
                     await manager.close()
                 self.store.save_validation(identity, {"status": "pending", "attempt": attempt, "checks": []})
+                self.store.save_integration(identity, {"status": "not_started", "files": []})
                 if feedback:
-                    history.append({"role": "user", "content": feedback})
+                    history.append({"role": "user", "content": "当前用户原始任务（约束保持不变）：\n" + message + "\n\n" + feedback})
                 manager = SubagentManager(runner, system,
                     lambda role: build_tools(workspace, self.settings, self.store, lock, role), emit, self.slots,
-                    validator=validator, report_repairs=self.settings.report_repairs, quota=quota)
+                    validator=validator, report_repairs=self.settings.report_repairs, quota=quota,
+                    bundle=WorkspaceBundle(workspace, self.settings.home, lock, allow_deletes=self.settings.allow_subagent_deletes) if self.settings.isolate_subagents else None,
+                    workspace_tools=lambda role, root, scopes: build_tools(root, self.settings, self.store, asyncio.Lock(), role,
+                                                                         write_paths=scopes, memory_workspace=workspace))
                 tools = build_tools(workspace, self.settings, self.store, lock, subagent=manager.dispatch)
 
                 async def settle():
                     return await manager.notifications(wait=True)
 
-                await runner.run(system, history, tools, emit, checkpoint, summary,
-                                 inject=manager.notifications, settle=settle)
+                await runner.run(system, history, tools, emit, checkpoint, summary, inject=manager.notifications, settle=settle)
                 await manager.close()
                 return not budget.exhausted
 

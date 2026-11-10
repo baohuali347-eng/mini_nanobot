@@ -23,10 +23,23 @@ def test_legacy_config_reads_only_needed_fields(tmp_path, monkeypatch):
     settings = load_settings(home)
     assert settings.api_key == 'test-key'
     assert settings.max_subagents == 3
+    assert settings.max_output_tokens == 8192
     assert 'test-key' not in repr(settings)
     monkeypatch.delenv('MINI_NANOBOT_API_KEY')
     with pytest.raises(ValueError, match='缺少环境变量'):
         load_settings(home)
+
+
+@pytest.mark.parametrize('limit', [8192, 0, True, '8192', 65537])
+def test_output_token_limit_is_loaded_and_validated(tmp_path, monkeypatch, limit):
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'maxOutputTokens': limit}))
+    if limit == 8192:
+        assert load_settings(tmp_path / 'profile', config).max_output_tokens == 8192
+    else:
+        with pytest.raises(ValueError, match='maxOutputTokens'):
+            load_settings(tmp_path / 'profile', config)
 
 
 def test_session_and_memory_survive_restart_without_modifying_legacy_database(settings):

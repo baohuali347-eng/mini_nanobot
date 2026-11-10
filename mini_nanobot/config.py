@@ -8,6 +8,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+from jsonschema import ValidationError, validate
+
+
+@dataclass(frozen=True)
+class ValidationRule:
+    id: str
+    command: str
+    paths: list[str] = field(default_factory=lambda: ["."])
+    working_dir: str = "."
+    timeout: int = 120
 
 
 @dataclass
@@ -24,6 +34,15 @@ class Settings:
     sandbox: str = ""
     sandbox_read: list[str] = field(default_factory=list)
     sandbox_write: list[str] = field(default_factory=list)
+    stream_usage: bool = True
+    max_model_calls: int = 60
+    run_timeout: int = 600
+    max_repairs: int = 2
+    report_repairs: int = 1
+    validation_rules: list[ValidationRule] = field(default_factory=list)
+    isolate_subagents: bool = True
+    allow_subagent_deletes: bool = False
+    max_output_tokens: int = 8192
 
 
 def load_settings(home: Path | None = None, config_path: Path | None = None) -> Settings:
@@ -34,6 +53,26 @@ def load_settings(home: Path | None = None, config_path: Path | None = None) -> 
     defaults = data.get("agents", {}).get("defaults", {})
     connection = data.get("providers", {}).get(defaults.get("provider", "custom"), {})
     execution = data.get("tools", {}).get("exec", {})
+    validation = data.get("validation", {})
+    try:
+        validate(validation, {"type": "object", "additionalProperties": False, "properties": {
+            "maxRepairAttempts": {"type": "integer", "minimum": 0, "maximum": 2},
+            "reportRepairAttempts": {"type": "integer", "minimum": 0, "maximum": 2},
+            "commands": {"type": "array", "maxItems": 6, "items": {
+                "type": "object", "additionalProperties": False, "required": ["id", "command"],
+                "properties": {"id": {"type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,39}$"},
+                               "command": {"type": "string", "minLength": 1, "maxLength": 12000},
+                               "paths": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"type": "string", "minLength": 1}},
+                               "workingDir": {"type": "string", "minLength": 1},
+                               "timeout": {"type": "integer", "minimum": 1, "maximum": 3600}},
+            }}}})
+    except ValidationError as error:
+        location = ".".join(str(part) for part in error.absolute_path) or "validation"
+        raise ValueError(f"后端验收配置无效：{location} 不符合 {error.validator} 约束。") from error
+    rules = [ValidationRule(row["id"], row["command"], row.get("paths", ["."]), row.get("workingDir", "."), row.get("timeout", 120))
+             for row in validation.get("commands", [])]
+    if len({rule.id for rule in rules}) != len(rules) or any(not rule.command.strip() for rule in rules):
+        raise ValueError("验收 ID 必须唯一，命令不能为空。")
 
     def resolve(value: str) -> str:
         def replace(match: re.Match[str]) -> str:
@@ -56,6 +95,15 @@ def load_settings(home: Path | None = None, config_path: Path | None = None) -> 
         sandbox=execution.get("sandbox", ""),
         sandbox_read=execution.get("sandboxRoBinds", []),
         sandbox_write=execution.get("sandboxRwBinds", []),
+        stream_usage=data.get("streamUsage", True),
+        max_model_calls=int(data.get("maxModelCalls", 60)),
+        run_timeout=int(data.get("runTimeout", 600)),
+        max_repairs=validation.get("maxRepairAttempts", 2),
+        report_repairs=validation.get("reportRepairAttempts", 1),
+        validation_rules=rules,
+        isolate_subagents=data.get("isolateSubagents", True),
+        allow_subagent_deletes=data.get("allowSubagentDeletes", False),
+        max_output_tokens=data.get("maxOutputTokens", 8192),
     )
     address = urlsplit(settings.api_base)
     if address.scheme not in {"http", "https"} or not address.netloc or address.username or address.query or address.fragment:
@@ -66,4 +114,16 @@ def load_settings(home: Path | None = None, config_path: Path | None = None) -> 
         raise ValueError("上下文预算应为 500～200000，命令超时应为 1～3600 秒。")
     if settings.sandbox not in {"", "seatbelt", "bwrap"}:
         raise ValueError("沙箱仅支持 seatbelt 或 bwrap。")
+    if not isinstance(settings.stream_usage, bool):
+        raise ValueError("streamUsage 应为布尔值。")
+    if type(settings.max_output_tokens) is not int or not 1 <= settings.max_output_tokens <= 65536:
+        raise ValueError("maxOutputTokens 应为 1～65536 的整数。")
+    if not isinstance(settings.isolate_subagents, bool):
+        raise ValueError("isolateSubagents 应为布尔值。")
+    if not isinstance(settings.allow_subagent_deletes, bool):
+        raise ValueError("allowSubagentDeletes 应为布尔值。")
+    if not 1 <= settings.max_model_calls <= 200 or not 1 <= settings.run_timeout <= 3600:
+        raise ValueError("总模型调用上限应为 1～200，总执行秒数应为 1～3600。")
+    if settings.api_key and any(settings.api_key in rule.command for rule in rules):
+        raise ValueError("后端验收命令不得包含模型密钥。")
     return settings

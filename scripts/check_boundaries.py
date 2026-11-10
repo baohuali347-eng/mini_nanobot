@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-core = {'agent', 'runner', 'context', 'subagents', 'task_graph', 'provider', 'session', 'tools', 'security', 'sandbox'}
+core = {'agent', 'runner', 'context', 'subagents', 'task_graph', 'provider', 'session', 'tools', 'security', 'sandbox', 'validation', 'evaluation', 'workspaces'}
 errors = []
 for file in (root / 'mini_nanobot').rglob('*.py'):
     for node in ast.walk(ast.parse(file.read_text())):

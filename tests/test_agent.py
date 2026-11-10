@@ -112,6 +112,63 @@ def test_interrupted_tool_calls_are_not_replayed(call):
     assert '避免重复执行' in fixed[-1]['content']
 
 
+async def test_thinking_only_truncation_stops_without_invalid_continuation(settings, model_factory):
+    model = model_factory([{'role': 'assistant', 'content': None, 'reasoning_content': '未完成的内部推理',
+                            '_finish_reason': 'length'}])
+    service = AgentService(settings, model)
+    try:
+        item = service.create_session(str(settings.workspace))
+        await service.start(item['id'], '修复代码')
+        saved = service.snapshot(item['id'])
+        assert saved['status'] == 'error' and len(model.requests) == 1
+        assert not any(message['role'] == 'assistant' and not message.get('content') for message in saved['messages'])
+        assert any(event['type'] == 'error' and 'maxOutputTokens' in event['message'] for event in saved['events'])
+    finally:
+        await service.close()
+
+
+async def test_truncated_tool_response_never_partially_writes_files(settings, model_factory, call):
+    source = settings.workspace / 'app.py'
+    source.write_text('original\n')
+    action = call('write_file', path='app.py', content='replacement\n')
+    action['_finish_reason'] = 'length'
+    model = model_factory([action])
+    service = AgentService(settings, model)
+    try:
+        item = service.create_session(str(settings.workspace))
+        await service.start(item['id'], '修改文件')
+        assert service.snapshot(item['id'])['status'] == 'error'
+        assert source.read_text() == 'original\n'
+        assert len(model.requests) == 1
+    finally:
+        await service.close()
+
+
+async def test_main_agent_sees_remaining_shared_calls_before_each_round(settings, model_factory, call):
+    settings.max_model_calls = 2
+    (settings.workspace / 'app.py').write_text('code\n')
+    model = model_factory([call('read_file', path='app.py'), {'role': 'assistant', 'content': '已读取代码。'}])
+    service = AgentService(settings, model)
+    try:
+        item = service.create_session(str(settings.workspace))
+        await service.start(item['id'], '读取 app.py')
+        assert service.snapshot(item['id'])['status'] == 'idle'
+        assert '额度剩余 2 次' in model.requests[0][0]['content']
+        assert '额度剩余 1 次' in model.requests[1][0]['content']
+    finally:
+        await service.close()
+
+
+def test_old_thinking_only_message_can_resume_with_completed_tool_results(call):
+    action = call('read_file', path='app.py')
+    tool = {'role': 'tool', 'tool_call_id': action['tool_calls'][0]['id'], 'content': '代码'}
+    history = [{'role': 'user', 'content': '修复代码'}, action, tool,
+               {'role': 'assistant', 'content': None, 'reasoning_content': '被截断的推理'},
+               {'role': 'user', 'content': '继续完成'}]
+    repaired = repair_history(history)
+    assert repaired == history[:3] + history[4:]
+
+
 async def test_background_subtasks_obey_shared_concurrency_limit(settings, model_factory, call):
     settings.max_subagents = 1
     active, peak = 0, 0

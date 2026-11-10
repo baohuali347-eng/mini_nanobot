@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Activity, chat, Message, request, RunEvent, Session, Status } from './api';
+import ValidationPanel from './ValidationPanel';
+import IntegrationPanel from './IntegrationPanel';
 
 const roles: Record<string, string> = { explorer: '探索', coder: '实现', reviewer: '审查' };
-const states: Record<string, string> = { queued: '排队中', waiting: '等待前置', blocked: '前置阻断', needs_followup: '待处理', running: '执行中', done: '已完成', error: '遇到问题', cancelled: '已停止', idle: '已就绪', interrupted: '上次运行中断' };
+const operations: Record<string, string> = { add: '新增', modify: '修改', delete: '删除' };
+const states: Record<string, string> = { queued: '排队中', waiting: '等待前置', blocked: '前置阻断', needs_followup: '待处理', running: '执行中', validating: '后端验收中', done: '已完成', error: '遇到问题', cancelled: '已停止', idle: '已就绪', interrupted: '上次运行中断' };
 const names: Record<string, string> = { read_file: '读取文件', list_dir: '查看目录', search: '搜索代码', write_file: '写入文件', edit_file: '修改文件', exec: '执行命令', subagent: '管理子任务', read_memory: '读取记忆', remember: '保存记忆' };
 
 function MessageContent({ content }: { content: string }) {
@@ -29,6 +32,13 @@ function TaskCard({ item }: { item: Activity }) {
       </details>) : <p className="muted">该角色未执行命令。</p>}
       {!!handoff.unresolved.length && <><b>未解决问题</b><ul>{handoff.unresolved.map((value, index) => <li key={index}>{value}</li>)}</ul></>}
       {handoff.evidence_truncated && <p className="notice">交接证据已限长，请查阅完整工具事件。</p>}
+      <ValidationPanel validation={handoff.validation} />
+      {handoff.artifact && <details><summary>补丁记录 · {handoff.artifact.files.length} 个文件</summary>
+        <p className="muted">补丁采集与发布分别记录，请结合整体集成结果判断。</p>
+        <p>{handoff.artifact.files.map(file => `${operations[file.operation] || file.operation}：${file.path}`).join('、')}</p>
+        <pre>{handoff.artifact.diff}</pre>
+        {handoff.artifact.truncated && <p>交接已限长，完整补丁保存在后端记录中。</p>}
+      </details>}
     </div>}
   </details>;
 }
@@ -101,9 +111,18 @@ export default function App() {
     }
     if (['tool', 'task', 'error'].includes(event.type)) setActivities(value => [...value, event].slice(-100));
     if (event.type === 'error') setNotice(event.message || '任务遇到问题。');
+    if (event.type === 'integration') setSelected(value => value ? { ...value, integration: event.integration } : value);
+    if (event.type === 'validation' && event.task_id === 'main') {
+      setSelected(value => value ? { ...value, validation: event.validation } : value);
+    }
+    if (event.type === 'repair') {
+      setSelected(value => value ? { ...value, validation: { status: 'pending', attempt: event.attempt, checks: [] }, integration: { status: 'not_started', files: [] } } : value);
+      setNotice(`后端验收未通过，正在进行第 ${(event.attempt || 2) - 1} 次修复。`);
+    }
     if (event.type === 'done' && event.session) {
       setSelected(event.session); setActivities(event.session.events); setStream(''); setBusy(false);
       void listSessions();
+      if (event.session.validation?.status === 'passed') setNotice('后端验收通过。');
     }
   }
   async function send(event: FormEvent) {
@@ -113,6 +132,7 @@ export default function App() {
     setNotice(''); setBusy(true); setIteration(0);
     try {
       const item = selected || await createSession();
+      setSelected(value => value ? { ...value, validation: { status: 'pending', checks: [] }, integration: { status: 'not_started', files: [] } } : value);
       setBusy(true); setInput(''); streaming.current = true;
       await chat(item.id, message, receive);
       const snapshot = await request<Session>(`/sessions/${item.id}`);
@@ -143,10 +163,10 @@ export default function App() {
     <button className="primary">进入工作台</button><p className="notice">{notice}</p></form></div>;
 
   const tasks = new Map<string, Activity>();
-  for (const item of activities) if (item.type === 'task' && item.task_id) tasks.set(`${item.run_id || ''}:${item.task_id}`, item);
+  for (const item of activities) if (item.type === 'task' && item.task_id) tasks.set(`${item.run_id || ''}:${item.workflow_attempt || 1}:${item.task_id}`, item);
   const toolsById = new Map<string, Activity>();
   for (const item of activities) if (item.type === 'tool') {
-    toolsById.set(`${item.run_id || ''}:${item.task_id || 'main'}:${item.call_id || item.name}`, item);
+    toolsById.set(`${item.run_id || ''}:${item.workflow_attempt || 1}:${item.task_id || 'main'}:${item.call_id || item.name}`, item);
   }
   const tools = [...toolsById.values()];
   return <div className="app">
@@ -190,6 +210,8 @@ export default function App() {
     </main>
 
     <aside className="inspector"><div className="section-title">任务与记忆</div><h2>执行过程</h2><p className="muted">查看工具活动和子任务结果，确认工作如何完成。</p>
+      <ValidationPanel validation={selected?.validation} />
+      <IntegrationPanel integration={selected?.integration} />
       <div className="task-list">{tasks.size === 0 && <p className="empty">子 agent 启动后会显示依赖、验收要求和交接证据。</p>}{[...tasks.entries()].map(([key, item]) => <TaskCard key={key} item={item} />)}</div>
       <details className="tool-list" open><summary>工具活动 <span>{tools.length}</span></summary>{tools.slice(-20).map((item, index) => <details key={item.event_id || index}><summary><span>{names[item.name || ''] || item.name}</span><small>{states[item.state || '']}</small></summary>{item.result && <pre>{item.result}</pre>}</details>)}{!tools.length && <p className="empty">暂无工具调用。</p>}</details>
       <details className="memory-panel"><summary>项目长期记忆</summary><p className="muted">记录项目规范和你的偏好，在该目录的新会话中继续使用。</p><textarea aria-label="项目长期记忆" rows={7} value={memory} disabled={!selected || busy} onChange={event => setMemory(event.target.value)} placeholder="例如：使用 pytest；修改后运行单元测试。" /><button disabled={!selected || busy} onClick={() => void saveMemory()}>保存记忆</button></details>

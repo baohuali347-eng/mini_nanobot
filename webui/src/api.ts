@@ -1,19 +1,31 @@
 /** 页面只与本地后端通信。模型密钥不进入前端配置。 */
 export type Message = { role: 'user' | 'assistant'; content: string };
+export type Validation = {
+  status: string; attempt?: number; artifact_hash?: string; reason?: string;
+  checks: { id: string; exit_code?: number | null; timed_out?: boolean | null; output?: string | null }[];
+};
+export type Integration = { status: string; files: string[]; reason?: string; artifact_hash?: string; validation?: Validation };
+export type Artifact = { status: string; files: { path: string; operation: string }[]; diff?: string; truncated?: boolean };
 export type Handoff = {
   task_id: string; role: string; status: string; depends_on: string[]; acceptance: string[];
   reported_outcome: string; summary: string; files_changed: string[]; unresolved: string[];
   checks: { command: string; working_dir: string; exit_code: number | null; timed_out: boolean; output: string }[];
   evidence_truncated: boolean;
+  validation?: Validation;
+  artifact?: Artifact | null; write_paths?: string[];
 };
 export type Activity = {
   type: string; event_id?: number; run_id?: string; task_id?: string; call_id?: string; role?: string;
   task?: string; state?: string; name?: string; result?: string; message?: string;
   depends_on?: string[]; acceptance?: string[]; handoff?: Handoff | null;
+  attempt?: number; workflow_attempt?: number; validation?: Validation;
+  integration?: Integration;
 };
 export type Session = {
   id: string; title: string; workspace: string; status: string;
   messages: Message[]; events: Activity[]; summary: string;
+  validation?: Validation;
+  integration?: Integration;
 };
 export type Status = { model: string; configured: boolean; workspace: string; max_subagents: number };
 export type RunEvent = Activity & { text?: string; iteration?: number; messages?: Message[]; session?: Session };

@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "arithmetic",
+      "category": "single_file",
+      "description": "修复 add 的加法，以及 safe_divide：分母为零返回 None，其余执行普通除法，支持负数和小数。",
+      "files": {
+        "calculator.py": "def add(a, b):\n    return a - b\n\ndef safe_divide(a, b):\n    return a // b\n"
+      },
+      "reference_files": {
+        "calculator.py": "def add(a, b):\n    return a + b\n\ndef safe_divide(a, b):\n    return None if b == 0 else a / b\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "calculator.py"
+          ],
+          "task": "修复 add 的加法，以及 safe_divide：分母为零返回 None，其余执行普通除法，支持负数和小数。"
+        }
+      ],
+      "validation": "from calculator import add, safe_divide\nassert add(2, 3) == 5\nassert add(-7, 4) == -3\nassert add(0.5, 1.25) == 1.75\nassert safe_divide(7, 2) == 3.5\nassert safe_divide(-3, 2) == -1.5\nassert safe_divide(4, 0) is None\n"
+    },
+    {
+      "id": "median",
+      "category": "single_file",
+      "description": "median 返回排序后中位数，偶数长度取中间两数平均，空列表返回 None，不得修改传入列表。",
+      "files": {
+        "stats.py": "def median(values):\n    values.sort()\n    return values[len(values) // 2]\n"
+      },
+      "reference_files": {
+        "stats.py": "def median(values):\n    if not values:\n        return None\n    ordered = sorted(values)\n    n = len(ordered)\n    return ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "stats.py"
+          ],
+          "task": "median 返回排序后中位数，偶数长度取中间两数平均，空列表返回 None，不得修改传入列表。"
+        }
+      ],
+      "validation": "from stats import median\nassert median([]) is None\nassert median([9]) == 9\nassert median([7, 1, 3]) == 3\nassert median([4, 1, 3, 2]) == 2.5\nassert median([-4, -2]) == -3\nvalues = [3, 1, 2]\nassert median(values) == 2 and values == [3, 1, 2]\n"
+    },
+    {
+      "id": "pagination",
+      "category": "single_file",
+      "description": "paginate(items, page, size) 使用从 1 开始的页码，末页不足正常返回，越界返回 []；page 或 size 小于 1 时抛 ValueError；不得修改输入。",
+      "files": {
+        "pagination.py": "def paginate(items, page, size):\n    return items[page * size:(page + 1) * size]\n"
+      },
+      "reference_files": {
+        "pagination.py": "def paginate(items, page, size):\n    if page < 1 or size < 1:\n        raise ValueError(\"invalid pagination\")\n    start = (page - 1) * size\n    return items[start:start + size]\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "pagination.py"
+          ],
+          "task": "paginate(items, page, size) 使用从 1 开始的页码，末页不足正常返回，越界返回 []；page 或 size 小于 1 时抛 ValueError；不得修改输入。"
+        }
+      ],
+      "validation": "from pagination import paginate\nvalues = list(range(7))\nassert paginate(values, 1, 3) == [0, 1, 2]\nassert paginate(values, 3, 3) == [6]\nassert paginate(values, 4, 3) == []\nassert paginate([], 1, 2) == []\nfor page, size in [(0, 2), (-1, 2), (1, 0), (1, -1)]:\n    try:\n        paginate(values, page, size)\n    except ValueError:\n        pass\n    else:\n        raise AssertionError('invalid pagination accepted')\nassert values == list(range(7))\n"
+    },
+    {
+      "id": "slug",
+      "category": "single_file",
+      "description": "slugify 转小写，将 ASCII 字母数字以外的连续字符替换为一个短横线，去掉首尾短横线；空输入返回空字符串。",
+      "files": {
+        "slug.py": "def slugify(text):\n    return text.lower().replace(\" \", \"-\")\n"
+      },
+      "reference_files": {
+        "slug.py": "import re\n\ndef slugify(text):\n    return re.sub(r\"[^a-z0-9]+\", \"-\", text.lower()).strip(\"-\")\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "slug.py"
+          ],
+          "task": "slugify 转小写，将 ASCII 字母数字以外的连续字符替换为一个短横线，去掉首尾短横线；空输入返回空字符串。"
+        }
+      ],
+      "validation": "from slug import slugify\nassert slugify(' Hello,   WORLD! ') == 'hello-world'\nassert slugify('a___b---c') == 'a-b-c'\nassert slugify('') == ''\nassert slugify('!!!') == ''\nassert slugify('v2.0 Release') == 'v2-0-release'\n"
+    },
+    {
+      "id": "invoice_discount",
+      "category": "cross_file",
+      "description": "修复折扣发票：discounted(amount, percent) 按百分数打折，percent 范围 0～100，否则 ValueError；invoice_total 汇总每项 price*quantity 后按 percent 打折。浮点误差允许 1e-8。",
+      "files": {
+        "pricing.py": "def discounted(amount, percent):\n    return amount * percent\n",
+        "invoice.py": "from pricing import discounted\n\ndef invoice_total(items, percent):\n    subtotal = sum(item[\"price\"] for item in items)\n    return subtotal\n"
+      },
+      "reference_files": {
+        "pricing.py": "def discounted(amount, percent):\n    if not 0 <= percent <= 100:\n        raise ValueError(\"invalid percent\")\n    return amount * (1 - percent / 100)\n",
+        "invoice.py": "from pricing import discounted\n\ndef invoice_total(items, percent):\n    return discounted(sum(item[\"price\"] * item[\"quantity\"] for item in items), percent)\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_invoice",
+          "files": [
+            "pricing.py",
+            "invoice.py"
+          ],
+          "task": "同时修复折扣计算和发票汇总的调用链。"
+        }
+      ],
+      "validation": "from pricing import discounted\nfrom invoice import invoice_total\nassert abs(discounted(80, 25) - 60) < 1e-8\nassert discounted(20, 0) == 20 and discounted(20, 100) == 0\nfor percent in [-1, 101]:\n    try:\n        discounted(20, percent)\n    except ValueError:\n        pass\n    else:\n        raise AssertionError('bad discount accepted')\nassert abs(invoice_total([{'price': 10, 'quantity': 3}, {'price': 5, 'quantity': 2}], 25) - 30) < 1e-8\nassert invoice_total([], 10) == 0\n"
+    },
+    {
+      "id": "boolean_config",
+      "category": "cross_file",
+      "description": "parse_bool 接受布尔值，以及忽略大小写和首尾空白的 true/1/yes、false/0/no 字符串，其余 ValueError。load_config 用它解析 enabled，缺省 False，并将 port 转为 int、缺省 8080。",
+      "files": {
+        "parsing.py": "def parse_bool(value):\n    return bool(value)\n",
+        "settings.py": "from parsing import parse_bool\n\ndef load_config(raw):\n    return {\"enabled\": bool(raw.get(\"enabled\", False)), \"port\": raw.get(\"port\", 8080)}\n"
+      },
+      "reference_files": {
+        "parsing.py": "def parse_bool(value):\n    if isinstance(value, bool):\n        return value\n    if isinstance(value, str):\n        normalized = value.strip().lower()\n        if normalized in {\"true\", \"1\", \"yes\"}:\n            return True\n        if normalized in {\"false\", \"0\", \"no\"}:\n            return False\n    raise ValueError(\"invalid boolean\")\n",
+        "settings.py": "from parsing import parse_bool\n\ndef load_config(raw):\n    return {\"enabled\": parse_bool(raw.get(\"enabled\", False)), \"port\": int(raw.get(\"port\", 8080))}\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "parsing.py",
+            "settings.py"
+          ],
+          "task": "parse_bool 接受布尔值，以及忽略大小写和首尾空白的 true/1/yes、false/0/no 字符串，其余 ValueError。load_config 用它解析 enabled，缺省 False，并将 port 转为 int、缺省 8080。"
+        }
+      ],
+      "validation": "from parsing import parse_bool\nfrom settings import load_config\nfor value in [True, ' TRUE ', 'yes', '1']:\n    assert parse_bool(value) is True\nfor value in [False, 'false', ' NO ', '0']:\n    assert parse_bool(value) is False\nfor value in ['maybe', '', None, 2]:\n    try:\n        parse_bool(value)\n    except ValueError:\n        pass\n    else:\n        raise AssertionError('bad boolean accepted')\nassert load_config({'enabled': 'false', 'port': '9000'}) == {'enabled': False, 'port': 9000}\nassert load_config({}) == {'enabled': False, 'port': 8080}\n"
+    },
+    {
+      "id": "inventory",
+      "category": "cross_file",
+      "description": "can_reserve(stock, quantity) 仅当 quantity 为正且不超过 stock 时为 True。reserve 返回扣减后的库存，非法数量或库存不足抛 ValueError，不可产生负库存。",
+      "files": {
+        "inventory.py": "def can_reserve(stock, quantity):\n    return stock > quantity\n",
+        "service.py": "from inventory import can_reserve\n\ndef reserve(stock, quantity):\n    return stock + quantity\n"
+      },
+      "reference_files": {
+        "inventory.py": "def can_reserve(stock, quantity):\n    return quantity > 0 and quantity <= stock\n",
+        "service.py": "from inventory import can_reserve\n\ndef reserve(stock, quantity):\n    if not can_reserve(stock, quantity):\n        raise ValueError(\"insufficient inventory or invalid quantity\")\n    return stock - quantity\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "inventory.py",
+            "service.py"
+          ],
+          "task": "can_reserve(stock, quantity) 仅当 quantity 为正且不超过 stock 时为 True。reserve 返回扣减后的库存，非法数量或库存不足抛 ValueError，不可产生负库存。"
+        }
+      ],
+      "validation": "from inventory import can_reserve\nfrom service import reserve\nassert can_reserve(5, 5) is True and can_reserve(5, 6) is False\nassert can_reserve(5, 0) is False and can_reserve(5, -1) is False\nassert reserve(5, 5) == 0 and reserve(7, 2) == 5\nfor quantity in [0, -2, 8]:\n    try:\n        reserve(5, quantity)\n    except ValueError:\n        pass\n    else:\n        raise AssertionError('invalid reservation accepted')\n"
+    },
+    {
+      "id": "shipping",
+      "category": "cross_file",
+      "description": "shipping_fee(subtotal) 满 100 免运费，否则 8；负金额 ValueError。checkout_total(items) 汇总 price*quantity 加运费，空购物车总额为 0。",
+      "files": {
+        "shipping.py": "def shipping_fee(subtotal):\n    return 0 if subtotal > 100 else 8\n",
+        "checkout.py": "from shipping import shipping_fee\n\ndef checkout_total(items):\n    return sum(item[\"price\"] for item in items)\n"
+      },
+      "reference_files": {
+        "shipping.py": "def shipping_fee(subtotal):\n    if subtotal < 0:\n        raise ValueError(\"negative subtotal\")\n    return 0 if subtotal >= 100 else 8\n",
+        "checkout.py": "from shipping import shipping_fee\n\ndef checkout_total(items):\n    if not items:\n        return 0\n    subtotal = sum(item[\"price\"] * item[\"quantity\"] for item in items)\n    return subtotal + shipping_fee(subtotal)\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_code",
+          "files": [
+            "shipping.py",
+            "checkout.py"
+          ],
+          "task": "shipping_fee(subtotal) 满 100 免运费，否则 8；负金额 ValueError。checkout_total(items) 汇总 price*quantity 加运费，空购物车总额为 0。"
+        }
+      ],
+      "validation": "from shipping import shipping_fee\nfrom checkout import checkout_total\nassert shipping_fee(100) == 0 and shipping_fee(99) == 8\ntry:\n    shipping_fee(-1)\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError('negative subtotal accepted')\nassert checkout_total([]) == 0\nassert checkout_total([{'price': 25, 'quantity': 4}]) == 100\nassert checkout_total([{'price': 20, 'quantity': 2}]) == 48\n"
+    },
+    {
+      "id": "clamp_and_slug",
+      "category": "independent",
+      "description": "修复两个独立工具：clamp 将数值限制到闭区间，lower>upper 时 ValueError；slugify 将 ASCII 非字母数字连续字符转成一个短横线，转小写并去首尾短横线。",
+      "files": {
+        "numbers_util.py": "def clamp(value, lower, upper):\n    return min(lower, max(upper, value))\n",
+        "text_util.py": "def slugify(text):\n    return text.replace(\" \", \"-\")\n"
+      },
+      "reference_files": {
+        "numbers_util.py": "def clamp(value, lower, upper):\n    if lower > upper:\n        raise ValueError(\"invalid interval\")\n    return max(lower, min(upper, value))\n",
+        "text_util.py": "import re\n\ndef slugify(text):\n    return re.sub(r\"[^a-z0-9]+\", \"-\", text.lower()).strip(\"-\")\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_numbers",
+          "files": [
+            "numbers_util.py"
+          ],
+          "task": "修复 clamp 与非法区间处理。"
+        },
+        {
+          "id": "fix_text",
+          "files": [
+            "text_util.py"
+          ],
+          "task": "修复 slugify 与空、特殊字符输入。"
+        }
+      ],
+      "validation": "from numbers_util import clamp\nfrom text_util import slugify\nassert [clamp(v, 0, 10) for v in [-2, 0, 4, 10, 12]] == [0, 0, 4, 10, 10]\nassert clamp(3, 2, 2) == 2\ntry:\n    clamp(1, 3, 2)\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError('invalid interval accepted')\nassert slugify(' Hello, WORLD! ') == 'hello-world'\nassert slugify('a___b---c') == 'a-b-c'\nassert slugify('!!!') == ''\n"
+    },
+    {
+      "id": "leap_and_temperature",
+      "category": "independent",
+      "description": "修复两个独立模块：公历闰年可被 4 整除且世纪年须被 400 整除；摄氏/华氏互转使用标准公式。",
+      "files": {
+        "calendar_util.py": "def is_leap(year):\n    return year % 4 == 0\n",
+        "temperature.py": "def to_fahrenheit(c):\n    return c + 32\n\ndef to_celsius(f):\n    return f - 32\n"
+      },
+      "reference_files": {
+        "calendar_util.py": "def is_leap(year):\n    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)\n",
+        "temperature.py": "def to_fahrenheit(c):\n    return c * 9 / 5 + 32\n\ndef to_celsius(f):\n    return (f - 32) * 5 / 9\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_calendar",
+          "files": [
+            "calendar_util.py"
+          ],
+          "task": "修复闰年判断。"
+        },
+        {
+          "id": "fix_temperature",
+          "files": [
+            "temperature.py"
+          ],
+          "task": "修复两种温度转换。"
+        }
+      ],
+      "validation": "from calendar_util import is_leap\nfrom temperature import to_fahrenheit, to_celsius\nassert is_leap(2000) and is_leap(2024)\nassert not is_leap(1900) and not is_leap(2023)\nfor c, f in [(0, 32), (100, 212), (-40, -40), (20, 68)]:\n    assert abs(to_fahrenheit(c) - f) < 1e-8\n    assert abs(to_celsius(f) - c) < 1e-8\n"
+    },
+    {
+      "id": "unique_and_search",
+      "category": "independent",
+      "description": "unique 按首次出现顺序去重且不修改列表，输入为可哈希对象。binary_search 对升序列表返回目标第一次出现的索引，不存在返回 -1。",
+      "files": {
+        "collections_util.py": "def unique(values):\n    return sorted(set(values))\n",
+        "search_util.py": "def binary_search(values, target):\n    return values.index(target)\n"
+      },
+      "reference_files": {
+        "collections_util.py": "def unique(values):\n    return list(dict.fromkeys(values))\n",
+        "search_util.py": "from bisect import bisect_left\n\ndef binary_search(values, target):\n    index = bisect_left(values, target)\n    return index if index < len(values) and values[index] == target else -1\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_unique",
+          "files": [
+            "collections_util.py"
+          ],
+          "task": "实现保持顺序的去重。"
+        },
+        {
+          "id": "fix_search",
+          "files": [
+            "search_util.py"
+          ],
+          "task": "实现返回首个匹配的二分搜索。"
+        }
+      ],
+      "validation": "from collections_util import unique\nfrom search_util import binary_search\nvalues = [3, 1, 3, 2, 1]\nassert unique(values) == [3, 1, 2] and values == [3, 1, 3, 2, 1]\nassert unique([]) == [] and unique(['b', 'a', 'b']) == ['b', 'a']\nassert binary_search([1, 2, 2, 2, 4], 2) == 1\nassert binary_search([], 1) == -1\nassert binary_search([1, 3], 2) == -1\nassert binary_search([1, 3], 3) == 1\n"
+    },
+    {
+      "id": "duration_and_chunks",
+      "category": "independent",
+      "description": "format_duration 将非负整数秒格式化为 HH:MM:SS，小时可超过 24，负数 ValueError。chunks 返回连续分块列表，size<=0 时 ValueError，不修改输入。",
+      "files": {
+        "duration.py": "def format_duration(seconds):\n    return str(seconds)\n",
+        "chunking.py": "def chunks(values, size):\n    return [values[:size]]\n"
+      },
+      "reference_files": {
+        "duration.py": "def format_duration(seconds):\n    if seconds < 0:\n        raise ValueError(\"negative duration\")\n    hours, rest = divmod(seconds, 3600)\n    minutes, seconds = divmod(rest, 60)\n    return f\"{hours:02d}:{minutes:02d}:{seconds:02d}\"\n",
+        "chunking.py": "def chunks(values, size):\n    if size <= 0:\n        raise ValueError(\"invalid size\")\n    return [values[i:i + size] for i in range(0, len(values), size)]\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_duration",
+          "files": [
+            "duration.py"
+          ],
+          "task": "修复时间格式化及负数处理。"
+        },
+        {
+          "id": "fix_chunks",
+          "files": [
+            "chunking.py"
+          ],
+          "task": "修复列表分块及非法大小处理。"
+        }
+      ],
+      "validation": "from duration import format_duration\nfrom chunking import chunks\nassert format_duration(0) == '00:00:00'\nassert format_duration(3661) == '01:01:01'\nassert format_duration(90000) == '25:00:00'\nassert chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]\nassert chunks([], 2) == []\nfor function in [lambda: format_duration(-1), lambda: chunks([1], 0), lambda: chunks([], -1)]:\n    try:\n        function()\n    except ValueError:\n        pass\n    else:\n        raise AssertionError('invalid argument accepted')\n"
+    },
+    {
+      "id": "money_contract",
+      "category": "shared_interface",
+      "description": "统一金额接口：line_total 返回整数分，使用 Decimal(str(price))*100*quantity，最终按 ROUND_HALF_UP 四舍五入。receipt_total 调用该接口并返回 {\"total_cents\":整数}，空列表为 0。",
+      "files": {
+        "money.py": "def line_total(price, quantity):\n    return float(price) * quantity\n",
+        "receipt.py": "from money import line_total\n\ndef receipt_total(items):\n    return {\"total\": sum(line_total(i[\"price\"], i[\"quantity\"]) for i in items)}\n"
+      },
+      "reference_files": {
+        "money.py": "from decimal import Decimal, ROUND_HALF_UP\n\ndef line_total(price, quantity):\n    return int((Decimal(str(price)) * 100 * quantity).quantize(Decimal(\"1\"), rounding=ROUND_HALF_UP))\n",
+        "receipt.py": "from money import line_total\n\ndef receipt_total(items):\n    return {\"total_cents\": sum(line_total(i[\"price\"], i[\"quantity\"]) for i in items)}\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_money",
+          "files": [
+            "money.py"
+          ],
+          "task": "将 line_total 接口迁移为整数分。"
+        },
+        {
+          "id": "fix_receipt",
+          "files": [
+            "receipt.py"
+          ],
+          "task": "适配整数分接口和 total_cents 字段。"
+        }
+      ],
+      "validation": "from money import line_total\nfrom receipt import receipt_total\nassert line_total('1.005', 1) == 101\nassert line_total('0.10', 3) == 30\nassert type(line_total(2, 3)) is int\nassert receipt_total([{'price': '1.005', 'quantity': 1}, {'price': '0.10', 'quantity': 3}]) == {'total_cents': 131}\nassert receipt_total([]) == {'total_cents': 0}\n"
+    },
+    {
+      "id": "user_id_contract",
+      "category": "shared_interface",
+      "description": "统一用户 ID 为去首尾空白的字符串。normalize_user 输出 id、name 两字段，name 去空白，不修改输入。index_users 使用 normalize_user 的规范字符串 id 作键，重复 ID 后者覆盖。",
+      "files": {
+        "users.py": "def normalize_user(raw):\n    return {\"id\": int(raw[\"id\"]), \"name\": raw[\"name\"]}\n",
+        "directory.py": "from users import normalize_user\n\ndef index_users(rows):\n    return {row[\"id\"]: row for row in rows}\n"
+      },
+      "reference_files": {
+        "users.py": "def normalize_user(raw):\n    return {\"id\": str(raw[\"id\"]).strip(), \"name\": raw[\"name\"].strip()}\n",
+        "directory.py": "from users import normalize_user\n\ndef index_users(rows):\n    users = [normalize_user(row) for row in rows]\n    return {user[\"id\"]: user for user in users}\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_users",
+          "files": [
+            "users.py"
+          ],
+          "task": "统一 normalize_user 的字段与 ID 类型。"
+        },
+        {
+          "id": "fix_directory",
+          "files": [
+            "directory.py"
+          ],
+          "task": "适配规范 ID 并调用 normalize_user。"
+        }
+      ],
+      "validation": "from users import normalize_user\nfrom directory import index_users\nraw = {'id': ' 007 ', 'name': ' Ada ', 'ignored': 1}\nassert normalize_user(raw) == {'id': '007', 'name': 'Ada'}\nassert raw['name'] == ' Ada '\nassert normalize_user({'id': 3, 'name': ' B '}) == {'id': '3', 'name': 'B'}\nassert index_users([raw, {'id': '007', 'name': ' New '}]) == {'007': {'id': '007', 'name': 'New'}}\nassert index_users([]) == {}\n"
+    },
+    {
+      "id": "geometry_contract",
+      "category": "shared_interface",
+      "description": "Rectangle 保留 width/height 构造参数，area 改为只读 property，负边长 ValueError。describe 返回 {\"width\":w,\"height\":h,\"area\":面积}，适配新 property。",
+      "files": {
+        "geometry.py": "class Rectangle:\n    def __init__(self, width, height):\n        self.width, self.height = width, height\n\n    def area(self):\n        return self.width + self.height\n",
+        "presentation.py": "def describe(rectangle):\n    return {\"width\": rectangle.width, \"height\": rectangle.height, \"area\": rectangle.area()}\n"
+      },
+      "reference_files": {
+        "geometry.py": "class Rectangle:\n    def __init__(self, width, height):\n        if width < 0 or height < 0:\n            raise ValueError(\"negative side\")\n        self.width, self.height = width, height\n\n    @property\n    def area(self):\n        return self.width * self.height\n",
+        "presentation.py": "def describe(rectangle):\n    return {\"width\": rectangle.width, \"height\": rectangle.height, \"area\": rectangle.area}\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_geometry",
+          "files": [
+            "geometry.py"
+          ],
+          "task": "实现 area property 和负数校验。"
+        },
+        {
+          "id": "fix_presentation",
+          "files": [
+            "presentation.py"
+          ],
+          "task": "适配 area property 接口。"
+        }
+      ],
+      "validation": "from geometry import Rectangle\nfrom presentation import describe\nrectangle = Rectangle(3, 4)\nassert rectangle.area == 12\nassert describe(rectangle) == {'width': 3, 'height': 4, 'area': 12}\nassert describe(Rectangle(0, 2))['area'] == 0\ntry:\n    Rectangle(-1, 2)\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError('negative side accepted')\ntry:\n    rectangle.area = 7\nexcept AttributeError:\n    pass\nelse:\n    raise AssertionError('area should be read only')\n"
+    },
+    {
+      "id": "result_contract",
+      "category": "shared_interface",
+      "description": "统一 parse_int 返回结构：合法整数文本返回 {\"ok\":True,\"value\":int,\"error\":None}，非法文本或 None 返回 {\"ok\":False,\"value\":None,\"error\":\"invalid integer\"}。sum_valid 仅对成功项求和并返回 {\"total\":sum,\"invalid\":失败项数量}。",
+      "files": {
+        "parsers.py": "def parse_int(text):\n    return int(text)\n",
+        "aggregation.py": "from parsers import parse_int\n\ndef sum_valid(values):\n    return sum(parse_int(value) for value in values)\n"
+      },
+      "reference_files": {
+        "parsers.py": "def parse_int(text):\n    try:\n        value = int(text)\n    except (ValueError, TypeError):\n        return {\"ok\": False, \"value\": None, \"error\": \"invalid integer\"}\n    return {\"ok\": True, \"value\": value, \"error\": None}\n",
+        "aggregation.py": "from parsers import parse_int\n\ndef sum_valid(values):\n    results = [parse_int(value) for value in values]\n    return {\"total\": sum(result[\"value\"] for result in results if result[\"ok\"]), \"invalid\": sum(not result[\"ok\"] for result in results)}\n"
+      },
+      "work_items": [
+        {
+          "id": "fix_parsers",
+          "files": [
+            "parsers.py"
+          ],
+          "task": "实现结构化解析结果。"
+        },
+        {
+          "id": "fix_aggregation",
+          "files": [
+            "aggregation.py"
+          ],
+          "task": "适配结构化结果，只汇总成功项。"
+        }
+      ],
+      "validation": "from parsers import parse_int\nfrom aggregation import sum_valid\nassert parse_int(' -3 ') == {'ok': True, 'value': -3, 'error': None}\nfor value in ['x', '1.2', '', None]:\n    assert parse_int(value) == {'ok': False, 'value': None, 'error': 'invalid integer'}\nassert sum_valid(['2', 'bad', '-1', None]) == {'total': 1, 'invalid': 2}\nassert sum_valid([]) == {'total': 0, 'invalid': 0}\n"
+    }
+  ]
+}

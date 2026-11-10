@@ -7,18 +7,41 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from mini_nanobot.security import IGNORED, resolve_path
+from mini_nanobot.security import IGNORED, path_in_scope, resolve_path
 from mini_nanobot.tools.base import Tool, ToolResult, parameters, text
 
 
+#基础的文件的工具
 class FileTool(Tool):
-    def __init__(self, workspace: Path, lock: asyncio.Lock):
-        self.workspace = workspace
-        self.lock = lock
+    def __init__(self, workspace: Path, lock: asyncio.Lock, write_paths: list[str] | None = None):
+        self.workspace = workspace #当前允许操作的项目根目录
+        self.lock = lock #写入操作共用的异步锁
+        self.write_paths = write_paths #写入还限制在这个范围内
 
+    #传入路径转换成实际路径
     def path(self, raw: str) -> Path:
         return resolve_path(self.workspace, raw)
 
+    #传入路径转换成实际路径，并检查是否在写入范围内
+    def write_path(self, raw: str) -> Path:
+        target = self.path(raw)
+        if self.write_paths is not None and not path_in_scope(str(target.relative_to(self.workspace)), self.write_paths):
+            raise PermissionError("文件不在本子任务的写入范围内。")
+        return target
+
+    """
+        创建父目录
+        ↓
+    在目标文件的同一目录创建临时文件
+        ↓
+    把完整内容写进临时文件，并刷新到磁盘
+        ↓
+    设置权限，已有文件则保留原权限
+        ↓
+    os.replace() 用临时文件替换目标文件
+        ↓
+    清理残留临时文件
+    """
     def atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
@@ -33,13 +56,16 @@ class FileTool(Tool):
         finally:
             Path(temporary).unlink(missing_ok=True)
 
-
+#下面都是一些工具的实现，继承FileTool，
+# 重写execute方法，这样设计后，每个具体工具只需要写自己的操作，
+# 路径检查和文件写入方式可以复用。
 class ReadFile(FileTool):
     name = "read_file"
     description = "读取文本文件，返回行号；大文件请分页读取。"
     read_only = True
     parameters = parameters(["path"], path=text("文件路径"), start_line={"type": "integer", "minimum": 1}, end_line={"type": "integer", "minimum": 1})
 
+    #execute方法是异步的，返回值是字符串
     async def execute(self, path: str, start_line: int = 1, end_line: int = 300, **kwargs: Any) -> str:
         target = self.path(path)
         if target.stat().st_size > 2_000_000:
@@ -109,7 +135,7 @@ class WriteFile(FileTool):
 
     async def execute(self, path: str, content: str, **kwargs: Any) -> str:
         async with self.lock:
-            target = self.path(path)
+            target = self.write_path(path)
             self.atomic_write(target, content)
         return ToolResult(f"已写入：{path}", evidence={"kind": "file_change", "path": str(target.relative_to(self.workspace))})
 
@@ -123,7 +149,7 @@ class EditFile(FileTool):
         if not old:
             raise ValueError("原始文本不能为空。")
         async with self.lock:
-            target = self.path(path)
+            target = self.write_path(path)
             content = target.read_text(encoding="utf-8")
             if content.count(old) != 1:
                 raise ValueError("原始文本必须恰好出现一次，请重新读取文件定位。")

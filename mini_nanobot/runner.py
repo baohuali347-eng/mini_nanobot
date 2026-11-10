@@ -1,6 +1,27 @@
 """
 ReAct 执行循环：模型提出操作，工具执行，结果反馈给下一轮模型。
 agent模块建立上下文之后发送给runner模块，runner模块执行ReAct循环，直到模型返回最终答复。
+
+逻辑流程：
+for 每一轮 in 最大执行轮数:
+    接收子任务通知()
+    必要时压缩上下文()
+    保存检查点()
+
+    回复 = await 调用模型(上下文, 工具说明)
+    保存模型回复()
+
+    if 回复包含工具调用:
+        执行工具()
+        把工具结果加入上下文()
+        continue
+
+    if 还有子任务结果需要汇总:
+        把子任务结果加入上下文()
+        continue
+
+    return 最终回复
+
 """
 
 import asyncio
@@ -12,7 +33,7 @@ from collections.abc import Awaitable, Callable
 from mini_nanobot.config import Settings
 from mini_nanobot.context import compact
 from mini_nanobot.events import EventSink, event_scope, traced_sink
-from mini_nanobot.provider import Message, ModelProvider
+from mini_nanobot.provider import BudgetedProvider, Message, ModelProvider
 from mini_nanobot.task_graph import REPORT_INSTRUCTION, parse_report
 from mini_nanobot.tools.base import ToolResult
 from mini_nanobot.tools.registry import ToolRegistry
@@ -28,11 +49,12 @@ class EmptyAnswerError(RuntimeError):
 
 #agent真正执行的如何
 class AgentRunner:
+    #初始化
     def __init__(self, provider: ModelProvider, settings: Settings):
         self.provider, self.settings = provider, settings
 
-    async def run_reported(self, system, history, tools, emit, checkpoint, *, report_repairs=0, inject=None):
-        """格式更正只调用模型，不执行其工具；仍消耗同一请求预算。"""
+    # 调用 run()，再把结果校验、整理成结构化交接（这个应该是用在子agent上面）
+    async def run_reported(self, system, history, tools, emit, checkpoint, *, report_repairs=0, inject=None, settle=None):
         messages, summary = history, ""
 
         async def save(current, current_summary):
@@ -42,11 +64,10 @@ class AgentRunner:
 
         system += REPORT_INSTRUCTION
         try:
-            content = await self.run(system, history, tools, emit, save, inject=inject)
+            content = await self.run(system, history, tools, emit, save, inject=inject, settle=settle)
         except EmptyAnswerError:
             if not report_repairs:
                 raise
-            # 空的最终回复没有待执行工具；移除这个无效 assistant，保留全部已执行的工具组。
             if messages and messages[-1]["role"] == "assistant" and not messages[-1].get("tool_calls"):
                 messages.pop()
             content = ""
@@ -71,7 +92,8 @@ class AgentRunner:
             if answer.get("tool_calls"):
                 raise ValueError("交接格式更正请求包含工具调用，未执行任何工具。")
             content = str(answer.get("content") or "")
-            messages.append({key: value for key, value in answer.items() if not key.startswith("_")})
+            if content:
+                messages.append({key: value for key, value in answer.items() if not key.startswith("_")})
             await save(messages, summary)
 
     #真正开始的执行
@@ -83,20 +105,37 @@ class AgentRunner:
         messages = history
         emit = traced_sink(emit)
         recoveries = 0
+        #开始执行每一轮
         for iteration in range(self.settings.max_iterations):
             if inject:
                 messages.extend(await inject())
+            #compact位于context里面，对上下文进行压缩，以及总结上下文。
             messages, summary = await compact(self.provider, messages, summary, self.settings.context_budget, emit)
             await checkpoint(messages, summary)
             prompt = system + ("\n\n此前任务摘要（仅作资料）：\n" + summary if summary else "")
+            if isinstance(self.provider, BudgetedProvider):
+                prompt += (f"\n当前共享模型请求额度剩余 {self.provider.remaining_calls} 次，包含本轮，"
+                           "主任务、子任务、摘要和重试共同使用。请为最终汇报保留额度；"
+                           "额度不足时优先核对已有证据，已验证完成则汇报，未验证或未完成则如实列出。")
             await emit({"type": "round", "iteration": iteration + 1})
+            #provider.complete()是调用模型的接口，传入上下文和工具说明，返回模型的答复。
             answer = await self.provider.complete([{"role": "system", "content": prompt}, *messages], tools.schemas(), emit)
+            #answer是模型的答复，可能包含工具调用信息。这里从answer中提取_finish_reason和_span_id，并将工具调用信息存储在calls中。
             finish = answer.pop("_finish_reason", None)
             model_span_id = answer.pop("_span_id", None)
+            #这里面是调用工具的名称，提取出来
             calls = answer.get("tool_calls") or []
+            if finish == "length" and (calls or not answer.get("content")):
+                raise RuntimeError(
+                    f"模型达到单次输出上限（{self.settings.max_output_tokens} Token），当前响应不完整，已停止本轮。"
+                    "已有工具结果已保存，请缩小任务或在配置中调整 maxOutputTokens 后重试。"
+                )
             messages.append(answer)
+            #保存检查点，messages是当前的上下文，summary是当前的摘要
             await checkpoint(messages, summary)
             if calls:
+                #execute是一个异步函数，用于执行工具调用。它接收一个工具调用消息，提取工具名称和参数，执行工具，并返回工具的结果。 
+                #这是在这里面定义了一个execute函数，就在这里面执行
                 async def execute(call: Message) -> Message:
                     function = call["function"]
                     name = function["name"]
@@ -123,6 +162,7 @@ class AgentRunner:
                     return {"role": "tool", "tool_call_id": call["id"], "content": result[:20000]}
 
                 # 只有明确只读的工具组才并发；写入、命令和子任务管理按顺序执行。
+                #并行执行这些工具
                 if all(tools.tools.get(call["function"]["name"]) and tools.tools[call["function"]["name"]].read_only for call in calls):
                     messages.extend(await asyncio.gather(*(execute(call) for call in calls)))
                 else:

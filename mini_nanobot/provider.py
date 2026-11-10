@@ -1,4 +1,8 @@
-"""唯一的模型适配器：OpenAI 兼容的流式 Chat Completions 协议。"""
+"""
+唯一的模型适配器：OpenAI 兼容的流式 Chat Completions 协议。
+provider.py 又把网络协议单独隔离出来，负责拼接流式文本和工具参数、保留 reasoning_content、处理有限重试。
+这样执行循环无需关心 HTTP 数据包的具体格式。
+"""
 
 import asyncio
 import json
@@ -14,17 +18,23 @@ from mini_nanobot.events import EventSink, discard_event, traced_sink
 Message = dict[str, Any]
 
 
+#这是自定义异常，专门表示模型调用预算耗尽，便于与普通网络错误区分。
 class BudgetExceeded(RuntimeError):
     pass
 
 
+#检查调用预算
 class BudgetedProvider:
-    """一次请求内，所有角色、摘要、格式更正和业务修复共享额度。"""
+    """全部角色、摘要及修复共享逻辑调用和 HTTP 请求预算。"""
 
     def __init__(self, provider, limit: int):
         self.provider, self.limit = provider, limit
         self.calls = self.requests = 0
         self.exhausted = False
+
+    @property
+    def remaining_calls(self) -> int:
+        return max(0, min(self.limit - self.calls, self.limit - self.requests))
 
     async def complete(self, messages, tools=None, emit: EventSink = discard_event):
         if self.calls >= self.limit:
@@ -39,10 +49,10 @@ class BudgetedProvider:
                     raise BudgetExceeded("已达到总 HTTP 模型请求预算（包含重试）。")
                 self.requests += 1
             await emit(event)
-
         return await self.provider.complete(messages, tools, forward)
 
 
+#发送 HTTP 请求、解析响应
 class ModelProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -61,7 +71,7 @@ class ModelProvider:
         span_id = uuid.uuid4().hex
         payload: dict[str, Any] = {
             "model": self.settings.model, "messages": messages,
-            "stream": True, "max_tokens": 4096,
+            "stream": True, "max_tokens": self.settings.max_output_tokens,
         }
         if tools:
             payload["tools"] = tools
@@ -78,6 +88,7 @@ class ModelProvider:
             await emit({**trace, "state": "running"})
             emitted = False
             content, reasoning, finish = "", "", None
+            reasoning_seen = False
             calls: dict[int, dict[str, Any]] = {}
             try:
                 async with self.client.stream(
@@ -91,7 +102,6 @@ class ModelProvider:
                         if not line.startswith("data:") or line[5:].strip() == "[DONE]":
                             continue
                         packet = json.loads(line[5:].strip())
-                        # usage 常位于 choices=[] 的独立末包，必须先读取。
                         if isinstance(packet.get("usage"), dict):
                             raw = packet["usage"]
                             usage = {key: raw.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
@@ -104,7 +114,9 @@ class ModelProvider:
                         delta = choice.get("delta", {})
                         if first_token_ms is None and any(delta.get(key) for key in ("content", "reasoning_content", "tool_calls")):
                             first_token_ms = round((time.perf_counter() - started) * 1000, 3)
-                        reasoning += delta.get("reasoning_content") or ""
+                        if isinstance(delta.get("reasoning_content"), str):
+                            reasoning_seen = True
+                            reasoning += delta["reasoning_content"]
                         if text := delta.get("content"):
                             content += text
                             emitted = True
@@ -122,7 +134,7 @@ class ModelProvider:
                     raise ValueError("模型连接提前结束，请重试；已有工具结果仍保留在会话中。")
                 answer: Message = {"role": "assistant", "content": content or None}
                 # DeepSeek 思考模式要求后续工具轮次带回 reasoning_content。
-                if reasoning:
+                if reasoning_seen:
                     answer["reasoning_content"] = reasoning
                 if calls:
                     answer["tool_calls"] = [calls[index] for index in sorted(calls)]
@@ -144,11 +156,19 @@ class ModelProvider:
                 )
                 retry = not emitted and transient and attempt < 2
                 await emit({**trace, "state": "error", "retrying": retry, "usage": usage,
-                            "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                            "error_type": type(error).__name__})
+                            "elapsed_ms": round((time.perf_counter() - started) * 1000, 3), "error_type": type(error).__name__})
                 if retry:
                     await asyncio.sleep(2 ** attempt)
                     continue
-                detail = str(error).replace(self.settings.api_key, "[密钥已隐藏]")
+                detail = str(error)
+                if isinstance(error, httpx.HTTPStatusError):
+                    try:
+                        body = error.response.json()
+                    except ValueError:
+                        body = {}
+                    api_error = body.get("error") if isinstance(body, dict) else None
+                    if isinstance(api_error, dict) and isinstance(api_error.get("message"), str):
+                        detail += "\n接口说明：" + api_error["message"].replace(self.settings.api_key, "[密钥已隐藏]")[:1000]
+                detail = detail.replace(self.settings.api_key, "[密钥已隐藏]")
                 raise RuntimeError(f"模型调用失败：{detail}") from None
         raise RuntimeError("模型暂时不可用。")

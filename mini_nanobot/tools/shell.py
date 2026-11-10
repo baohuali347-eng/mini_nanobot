@@ -1,4 +1,14 @@
-"""命令执行：工作目录检查、基本命令过滤、可选系统沙箱与进程组清理。"""
+"""
+命令执行：工作目录检查、基本命令过滤、可选系统沙箱与进程组清理。
+
+execute函数执行：
+模型调用 exec 工具，最终执行的就是这个函数。它按顺序：
+- 检查工作目录，过滤明显危险命令和越界路径。
+- 如果配置了沙箱，包装命令。
+- 准备子进程环境变量，排除模型密钥。
+- 启动 Shell 子进程，调用 drain() 收集输出并限制执行时间。
+- 正常结束时返回退出码、输出和执行证据；超时或取消时调用 terminate() 清理。
+"""
 
 import asyncio
 import os
@@ -19,10 +29,12 @@ class ExecuteCommand(Tool):
     description = "在当前项目执行命令并返回退出码和输出；停止任务会终止命令进程组。"
     parameters = parameters(["command"], command=text("命令"), working_dir=text("项目内的执行目录，默认当前项目"))
 
+    #保存执行环境
     def __init__(self, workspace, settings: Settings):
         self.workspace = workspace
         self.settings = settings
 
+    #命令执行的总入口
     async def execute(self, command: str, working_dir: str = ".", **kwargs: Any) -> str:
         original_command = command
         cwd = resolve_path(self.workspace, working_dir)
@@ -47,6 +59,9 @@ class ExecuteCommand(Tool):
         environment = {key: value for key, value in os.environ.items() if key in {
             "PATH", "LANG", "LC_ALL", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMPDIR",
         }}
+        # 副本可能位于另一个 Git 仓库的子目录中；禁止向工作区外发现父仓库。
+        # 工作区自身有 .git 时仍可正常使用；这不是对恶意脚本的系统隔离。
+        environment["GIT_CEILING_DIRECTORIES"] = str(self.workspace.resolve().parent)
         process = await asyncio.create_subprocess_shell(
             command, cwd=cwd, env=environment,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
@@ -54,6 +69,7 @@ class ExecuteCommand(Tool):
         )
         output = bytearray()
 
+        #持续读取输出，等待命令结束
         async def drain() -> None:
             assert process.stdout is not None
             while chunk := await process.stdout.read(4096):
@@ -61,6 +77,7 @@ class ExecuteCommand(Tool):
                     output.extend(chunk[:20000 - len(output)])
             await process.wait()
 
+        #终止命令并完成清理
         async def terminate() -> None:
             with suppress(ProcessLookupError):
                 if sys.platform == "win32":
@@ -70,6 +87,7 @@ class ExecuteCommand(Tool):
                     os.killpg(process.pid, signal.SIGKILL)
             await process.communicate()
 
+        #这个方法是异步的，返回值是ToolResult对象，里面包含了执行结果和证据
         try:
             await asyncio.wait_for(drain(), self.settings.command_timeout)
         except asyncio.TimeoutError:
