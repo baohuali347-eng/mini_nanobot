@@ -1,0 +1,289 @@
+"""沿用 nanobot 的 bwrap / Seatbelt 隔离实现，移除媒体目录授权。
+配置了沙箱时必须成功启动；不会降级成无隔离执行。文件只读与可写挂载分别授权。
+有些权限需要进行处理
+"""
+
+import os
+import shlex
+from pathlib import Path
+from typing import Iterable
+
+
+def _normalize_bind_paths(
+    paths: Iterable[str] | None,
+    *,
+    workspace: Path | None = None,
+) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in paths or []:
+        value = str(raw).strip()
+        if not value:
+            continue
+        path = Path(os.path.expandvars(value)).expanduser()
+        if not path.is_absolute():
+            continue
+        resolved_path = path.resolve(strict=False)
+        if workspace is not None:
+            try:
+                workspace.relative_to(resolved_path)
+            except ValueError:
+                pass
+            else:
+                # A later bind of the workspace or one of its parents could
+                # cover the tmpfs that hides the config directory.
+                continue
+        resolved = str(resolved_path)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(resolved)
+    return out
+
+
+def _bwrap(
+    command: str,
+    workspace: str,
+    cwd: str,
+    *,
+    sandbox_ro_binds: Iterable[str] | None = None,
+    sandbox_rw_binds: Iterable[str] | None = None,
+) -> str:
+    ws = Path(workspace).resolve()
+
+    try:
+        sandbox_cwd = str(ws / Path(cwd).resolve().relative_to(ws))
+    except ValueError:
+        sandbox_cwd = str(ws)
+
+    required = ["/usr"]
+    optional = [
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/etc/alternatives",
+        "/etc/ssl/certs",
+        "/etc/pki/tls/certs",
+        "/etc/pki/ca-trust",
+        "/etc/crypto-policies",
+        "/etc/resolv.conf",
+        "/etc/ld.so.cache",
+    ]
+
+    args = ["bwrap", "--new-session", "--die-with-parent", "--setenv", "HOME", str(ws)]
+    for p in required:
+        args += ["--ro-bind", p, p]
+    for p in optional:
+        args += ["--ro-bind-try", p, p]
+    args += [
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+        "--tmpfs", str(ws.parent),
+        "--dir", str(ws),
+        "--bind", str(ws), str(ws),
+    ]
+    for p in _normalize_bind_paths(sandbox_ro_binds, workspace=ws):
+        args += ["--ro-bind-try", p, p]
+    for p in _normalize_bind_paths(sandbox_rw_binds, workspace=ws):
+        args += ["--bind-try", p, p]
+    args += ["--chdir", sandbox_cwd, "--", "sh", "-c", command]
+    return shlex.join(args)
+
+
+# System code and certificates needed by command-line tools. Do not grant
+# /var, /tmp, /Library or /etc wholesale: those contain host application data,
+# not an isolated scratch filesystem as in bwrap. Seatbelt matches real paths.
+_SEATBELT_SYSTEM_READ_SUBPATHS = (
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/dev",
+    "/System",
+    "/Library/Developer/CommandLineTools",
+    "/private/etc/ssl",
+    "/private/var/db/dyld",
+    "/private/var/db/timezone",
+)
+
+_SEATBELT_SYSTEM_READ_LITERALS = (
+    "/private/etc/hosts",
+    "/private/etc/services",
+    "/private/etc/protocols",
+    "/private/etc/gitconfig",
+    "/etc/gitconfig",
+    "/private/var/run/resolv.conf",
+    "/private/var/select/sh",
+    "/private/var/select/developer_dir",
+    "/private/var/db/xcode_select_link",
+    "/var/select/developer_dir",
+    "/var/db/xcode_select_link",
+)
+
+# Ancestors that must stay searchable but are not covered by any allowed
+# subpath.  Resolving "/private/var/..." stats "/private", and
+# (subpath "/private/var") does not cover its own parent.
+_SEATBELT_TRAVERSABLE_LITERALS = ("/private",)
+
+
+def _seatbelt_ancestors(*paths: Path) -> list[str]:
+    """收集允许路径的所有父目录，仅授予元数据访问以便路径解析，不开放父目录内容。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        for ancestor in path.parents:
+            name = str(ancestor)
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _seatbelt_is_within(path: Path, root: Path) -> bool:
+    """Match existing path aliases without lowercasing case-sensitive volumes."""
+    if path.is_relative_to(root):
+        return True
+    for ancestor in (path, *path.parents):
+        try:
+            if ancestor.samefile(root):
+                return True
+        except OSError:
+            # Missing/inaccessible paths retain conservative lexical matching.
+            continue
+    return False
+
+
+def _sbpl_quote(path: str) -> str:
+    """把路径转换为沙箱规则中的字符串字面量，转义引号和反斜杠以防规则注入。"""
+    escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _seatbelt(
+    command: str,
+    workspace: str,
+    cwd: str,
+    *,
+    sandbox_ro_binds: Iterable[str] | None = None,
+    sandbox_rw_binds: Iterable[str] | None = None,
+) -> str:
+    """使用 macOS Seatbelt 包装命令。工作目录可读写，额外只读与可写目录分别授权；默认不共享宿主临时目录。网络权限沿用上游。后面的规则可覆盖前面的规则，因此授权顺序必须保留。"""
+    ws = Path(workspace).resolve()
+
+    try:
+        sandbox_cwd = str(ws / Path(cwd).resolve().relative_to(ws))
+    except ValueError:
+        sandbox_cwd = str(ws)
+
+    def subpaths(paths: Iterable[str]) -> str:
+        return " ".join(f"(subpath {_sbpl_quote(p)})" for p in paths)
+
+    ro_binds = _normalize_bind_paths(sandbox_ro_binds, workspace=ws)
+    rw_binds = _normalize_bind_paths(sandbox_rw_binds, workspace=ws)
+
+    rules = [
+        "(version 1)",
+        "(deny default)",
+        "(allow process*)",
+        "(allow sysctl-read)",
+        "(allow mach*)",
+        "(allow ipc*)",
+        "(allow network*)",
+        # sh(1) reads the root directory while resolving a path, and
+        # (subpath "/usr") does not cover "/" itself.  Without this rule the
+        # shell aborts during startup.
+        '(allow file-read* (literal "/"))',
+        f"(allow file-read* {subpaths(_SEATBELT_SYSTEM_READ_SUBPATHS)})",
+        "(allow file-read* "
+        + " ".join(f"(literal {_sbpl_quote(p)})" for p in _SEATBELT_SYSTEM_READ_LITERALS)
+        + ")",
+        '(allow file-write* (literal "/dev/null") (literal "/dev/zero"))',
+    ]
+
+    # Mask the config directory.  The workspace allow below re-exposes the
+    # workspace subtree, because the last matching rule wins.
+    parent = ws.parent
+    if parent != ws and str(parent) != "/":
+        rules.append(f"(deny file-read* file-write* (subpath {_sbpl_quote(str(parent))}))")
+
+    # Keep every ancestor of an allowed path searchable, including the masked
+    # parent: metadata only, so it cannot be listed or read.
+    traversable = _seatbelt_ancestors(
+        ws, *(Path(p) for p in ro_binds), *(Path(p) for p in rw_binds),
+        *(Path(p) for p in _SEATBELT_SYSTEM_READ_SUBPATHS),
+        *(Path(p) for p in _SEATBELT_SYSTEM_READ_LITERALS),
+    )
+    literals = [
+        *(p for p in _SEATBELT_TRAVERSABLE_LITERALS if p not in traversable),
+        *traversable,
+    ]
+    rules.append(
+        "(allow file-read-metadata "
+        + " ".join(f"(literal {_sbpl_quote(p)})" for p in literals)
+        + ")"
+    )
+
+    rules.append(f"(allow file-read* file-write* (subpath {_sbpl_quote(str(ws))}))")
+
+    for p in ro_binds:
+        rules.append(f"(allow file-read* (subpath {_sbpl_quote(p)}))")
+        # A read allow does not revoke a broader write grant (e.g. workspace).
+        rules.append(f"(deny file-write* (subpath {_sbpl_quote(p)}))")
+    for p in rw_binds:
+        rules.append(f"(allow file-read* file-write* (subpath {_sbpl_quote(p)}))")
+
+    # Path-based read-only rules do not follow a renamed ancestor. Keep those
+    # directory entries fixed without denying writes to their other children.
+    # A RW bind covering the entire RO root intentionally overrides protection;
+    # a writable descendant must not unlock the rest of the read-only tree.
+    writable_roots = [Path(p) for p in rw_binds]
+    protected_roots = [
+        root for root in (Path(p) for p in ro_binds)
+        if not any(_seatbelt_is_within(root, writable) for writable in writable_roots)
+    ]
+    ancestors = _seatbelt_ancestors(*protected_roots)
+    if ancestors:
+        rules.append(
+            "(deny file-write-unlink "
+            + " ".join(f"(literal {_sbpl_quote(p)})" for p in ancestors)
+            + ")"
+        )
+
+    # sandbox-exec(1) has no --chdir. Exit on failure before evaluating any of
+    # the submitted shell list; `cd ... && a; b` would still execute b on failure.
+    args = [
+        # Resolve the security boundary before consulting operator tool PATHs.
+        "/usr/bin/sandbox-exec",
+        "-p",
+        "\n".join(rules),
+        "/usr/bin/env",
+        f"HOME={ws}",
+        f"TMPDIR={ws}",
+        "sh",
+        "-c",
+        f"cd {shlex.quote(sandbox_cwd)} || exit\n{command}",
+    ]
+    return shlex.join(args)
+
+
+_BACKENDS = {"bwrap": _bwrap, "seatbelt": _seatbelt}
+
+
+def wrap_command(
+    sandbox: str,
+    command: str,
+    workspace: str,
+    cwd: str,
+    *,
+    sandbox_ro_binds: Iterable[str] | None = None,
+    sandbox_rw_binds: Iterable[str] | None = None,
+) -> str:
+    """按明确配置选择系统沙箱；未知后端报错，禁止无隔离回退。"""
+    if backend := _BACKENDS.get(sandbox):
+        return backend(
+            command,
+            workspace,
+            cwd,
+            sandbox_ro_binds=sandbox_ro_binds,
+            sandbox_rw_binds=sandbox_rw_binds,
+        )
+    raise ValueError(f"Unknown sandbox backend {sandbox!r}. Available: {list(_BACKENDS)}")

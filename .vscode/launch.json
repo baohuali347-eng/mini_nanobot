@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "mini_nanobot：完整前后端",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "mini_nanobot",
+      "args": ["web"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "mini_nanobot: 初始化配置"
+    },
+    {
+      "name": "mini_nanobot：交互编程",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "mini_nanobot",
+      "args": ["code", "-w", "${workspaceFolder}"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "mini_nanobot: 初始化配置"
+    },
+    {
+      "name": "mini_nanobot：单次任务",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "mini_nanobot",
+      "args": ["code", "-w", "${workspaceFolder}", "-m", "${input:codingTask}"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "mini_nanobot: 初始化配置"
+    }
+  ],
+  "inputs": [
+    {"id": "codingTask", "type": "promptString", "description": "输入编程任务", "default": "用 explorer 分析项目结构，汇总主要模块和入口"}
+  ]
+}

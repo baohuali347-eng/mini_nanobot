@@ -1,24 +1,15 @@
-# Working on nanobot
+# mini_nanobot 开发约定
 
-The Python gateway owns agent execution, sessions, tools, memory, and security policy. WebUI and TUI share that runtime; keep execution and policy out of the clients.
+本项目已裁剪为单一中文编程助手。主要学习路径是 cli.py → server.py / agent.py → runner.py → tools/；任务图协议在 task_graph.py，调度在 subagents.py，模型在 provider.py，会话在 session.py，上下文在 context.py。
 
-## Task-specific guidance
-
-| When working on | Read |
-| --- | --- |
-| Core boundaries, extensions, or internal types | [`.agent/design.md`](.agent/design.md) |
-| Refactoring, fallbacks, or test selection | [`.agent/simplify.md`](.agent/simplify.md) |
-| User-facing copy, feature naming, or localization | [`.agent/copywriting.md`](.agent/copywriting.md) |
-| Path permissions, HTTP/MCP, or shell isolation | [`.agent/security.md`](.agent/security.md) |
-| Dependency setup, WebUI transport, config, Windows, prompts, or persistence | [`.agent/gotchas.md`](.agent/gotchas.md) |
-| Reusing verification evidence | [`.agent/workflow.md`](.agent/workflow.md) |
-| WebUI/host compatibility | [`.agent/review-guide.md`](.agent/review-guide.md) |
-| Contribution or publication | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/releasing.md`](docs/releasing.md) |
-
-## Development constraints
-
-- Analyze the required behavior, state ownership, and root cause before extending existing code. Refactor when the structure causes the problem; a smaller diff does not justify another fallback.
-- Do not add defensive tests for hypothetical internal states or unsupported combinations. Each new test needs a reachable path and a meaningful contract to protect.
-- Do not add tests merely to prove that nonexistent behavior, removed code, or obsolete symbols are absent. Negative assertions must exercise a concrete, reachable risk and protect an observable behavioral contract; prefer testing supported actions and their results.
-- Do not run `ruff format`; mechanical formatting obscures git blame and creates unrelated diffs. This constraint takes precedence over the optional touched-file formatting in `CONTRIBUTING.md`.
-- Do not manually wrap prose in Markdown files. Keep each paragraph on one source line; use line breaks only for Markdown structure.
+- 界面、提示词、文档和主要注释使用中文；Python/TypeScript 标识符与标准协议字段使用常见英文。
+- 执行、权限、模型调用和持久化属于 Python 后端，前端只负责交互与事件展示。
+- 计划须整批校验后再启动；等待依赖不能占并发名额。交接的文件和命令证据来自工具，角色的完成声明不能冒充机器验收。
+- 文件工具必须经过 security.resolve_path，检查解析后的符号链接边界。探索与审查角色只提供只读工具。
+- Shell 的目录检查和命令过滤属于应用层限制。配置 seatbelt/bwrap 后必须成功启动隔离，不得失败后无隔离执行。
+- Shell 子进程不得继承模型密钥。停止与超时必须清理进程组。
+- 工具按 base.Tool 实现，并在 tools.registry.build_tools 中显式注册；不要重新引入自动插件扫描、渠道或自更新系统。
+- 配置和旧版数据不得删除；精简版使用独立 mini_sessions.sqlite3。API、网页和日志不得回显密钥。
+- 会话写入必须通过 SessionStore 的 SQLite 事务。恢复遇到未配对工具记录时先检查实际结果，不能自动重放未知操作。
+- 新测试应保护真实用户路径或重要权限边界；不要测试实现细节。不要运行 ruff format，不做无关机械改动。
+- 修改后按需运行 pytest、ruff check、scripts/check_boundaries.py 和前端 npm run build / npm test。
